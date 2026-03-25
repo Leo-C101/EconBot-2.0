@@ -10,7 +10,7 @@ find_package(dpp REQUIRED)
 
 # Add your executable
 add_executable(bot
-    src/main.cpp
+    main.cpp
     # add more .cpp files here if needed
 )
 
