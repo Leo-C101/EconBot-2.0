@@ -445,9 +445,10 @@ void HandleHelpCommand(const dpp::message_create_t& event) {
 			"`!promote` - Check your progress towards a promotion or get a promotion"
 		)
 		.add_field("Economy",
-			"`!view` - View your player stats\n"
+			"`!view [@user]` - View your player stats\n"
 			"`!deposit <amount>` - Deposit cash into your bank\n"
-			"`!withdraw <amount>` - Withdraw cash from your bank\n"			"`!leaderboard` - View the leaderboard of richest players\n"
+			"`!withdraw <amount>` - Withdraw cash from your bank\n"
+			"`!leaderboard` - View the leaderboard of richest players\n"
 			"`!passive` - Collect passive income earned from your bank balance\n"
 			"`!giveMoney @user <amount>` - Pay a user an amount of money\n"
 			"`!rob @user` - Rob another user's cash\n"
@@ -460,7 +461,7 @@ void HandleHelpCommand(const dpp::message_create_t& event) {
 		.add_field("Gambling",
 			"`!coinflip` - Bet on heads or tails for a chance to win money\n"
 			"`!roulette` - Gamble away your money at the roulette table\n"
-			"`!blackjack` - Gamble away your money at the blackjack table"
+			"`!blackjack` - Gamble away your money at the blackjack table\n"
 			"`!duel @user <amount>` - Create a duel request for another user\n"
 			"`!accept` - Accept a pending duel offer"
 		)
@@ -475,7 +476,7 @@ void HandleHelpCommand(const dpp::message_create_t& event) {
 		.add_field("Admin", 
 			"`!shutdown` - Shutdown the bot\n"
 			"`!adminGiveMoney @user <amount>` - Give a user an amount of money\n"
-			"`!adminRemoveMoney @user <amount>` - Remove an amount of money from a user"
+			"`!adminRemoveMoney @user <amount>` - Remove money from a user"
 		);
 
 	event.reply(dpp::message(event.msg.channel_id, embed));
@@ -492,10 +493,35 @@ static std::string FormatCooldown(size_t remaining) {
 	return std::format("{}m {}s", minutes, seconds);
 };
 
-void HandleViewCommand(User& user, const dpp::message_create_t& event) {
+void HandleViewCommand(const std::vector<User>& users, User& selfUser, const dpp::message_create_t& event) {
+	std::vector<std::string> arguments = SplitString(event.msg.content, ' ');
+	arguments.erase(arguments.begin());
+
+	const User* targetUser = &selfUser;
+	std::string displayName = event.msg.author.username;
+
+	if (!arguments.empty()) {
+		std::string targetId = ParseMention(arguments[0]);
+		if (targetId.empty()) {
+			event.reply(dpp::embed().set_title("View").set_description("Argument 1 (@user) is invalid.\nUsage: !view [@user]"));
+			return;
+		}
+
+		size_t targetIdx = FindUser(users, targetId);
+		if (targetIdx == users.size()) {
+			event.reply(dpp::embed().set_title("View").set_description("That user has no account."));
+			return;
+		}
+
+		targetUser = &users[targetIdx];
+
+		dpp::user* dppUser = dpp::find_user(std::stoull(targetId));
+		displayName = dppUser ? dppUser->username : targetId;
+	}
+	
 	dpp::embed embed;
-	embed.set_title(event.msg.author.username)
-		 .add_field("Balance", std::format("Cash: ${}\nBank: ${}", user.cash, user.bank));
+	embed.set_title(displayName)
+		 .add_field("Balance", std::format("Cash: ${}\nBank: ${}", targetUser->cash, targetUser->bank));
 
 	size_t currentTime = static_cast<size_t>(time(nullptr));
 
@@ -509,14 +535,14 @@ void HandleViewCommand(User& user, const dpp::message_create_t& event) {
 	embed.add_field("Timers",
 		std::format(
 			"Work: {}\nRob: {}\nDaily: {}\nWeekly: {}\n",
-			TimerStatus(user.lastWork, SECONDS_IN_HALF_HOUR),
-			TimerStatus(user.lastRobbery, SECONDS_IN_HOUR),
-			TimerStatus(user.lastDaily, SECONDS_IN_DAY),
-			TimerStatus(user.lastWeekly, SECONDS_IN_WEEK)
+			TimerStatus(targetUser->lastWork, SECONDS_IN_HALF_HOUR),
+			TimerStatus(targetUser->lastRobbery, SECONDS_IN_HOUR),
+			TimerStatus(targetUser->lastDaily, SECONDS_IN_DAY),
+			TimerStatus(targetUser->lastWeekly, SECONDS_IN_WEEK)
 		)
 	);
 
-	size_t pendingPassive = user.passiveBalance + CalcPassiveIncome(user.bank, user.lastPassive);
+	size_t pendingPassive = targetUser->passiveBalance + CalcPassiveIncome(targetUser->bank, targetUser->lastPassive);
 	embed.add_field("Passive Income",
 		std::format("Pending: ${}\n(1% of bank/hour, max {} hours)", pendingPassive, PASSIVE_MAX_HOURS)
 	);
@@ -537,7 +563,7 @@ void HandleJobCommand(User& user, const dpp::message_create_t& event) {
 	std::string jobStr = "";
 
 	for (size_t i = 0; i < JOB_PATHS.size(); ++i) {
-		jobStr += JOB_PATHS[i][0].title + '\n';
+		jobStr += std::format("{} (${})\n", JOB_PATHS[i][0].title, JOB_PATHS[i][0].payPerHour);
 		jobDropdown.add_select_option(dpp::select_option(JOB_PATHS[i][0].title, std::to_string(i), "Starting Position"));
 	}
 
@@ -1528,6 +1554,9 @@ void HandleDuelCommand(std::unordered_map<std::string, PendingDuel>& pendingDuel
 
 	pendingDuels[targetId] = PendingDuel(challenger.id, bet);
 
+	dpp::user* challengerDppUser = dpp::find_user(std::stoull(challenger.id));
+	std::string challengerName = challengerDppUser ? challengerDppUser->username : challenger.id;
+
 	dpp::user* targetDppUser = dpp::find_user(std::stoull(targetId));
 	std::string targetName = targetDppUser ? targetDppUser->username : targetId;
 
@@ -1535,9 +1564,9 @@ void HandleDuelCommand(std::unordered_map<std::string, PendingDuel>& pendingDuel
 		dpp::embed().set_title("Duel")
 		.set_description(
 			std::format(
-				"<@{}> has challenged **{}** to a duel for ${}!\n"
+				"**{}** has challenged** {}** to a duel for ${}!\n"
 				"**{}**, type `!accept` within {} seconds to accept.",
-				challenger.id, targetName, bet,
+				challengerName, targetName, bet,
 				targetName, DUEL_EXPIRY_SECONDS
 			)
 		)
@@ -1613,7 +1642,6 @@ void HandlePassiveCommand(User& user, const dpp::message_create_t& event) {
 
 	size_t accrued = CalcPassiveIncome(user.bank, user.lastPassive);
 	user.passiveBalance += accrued;
-	user.lastPassive = currentTime;
 
 	if (user.passiveBalance == 0) {
 		dpp::embed embed;
@@ -1626,6 +1654,8 @@ void HandlePassiveCommand(User& user, const dpp::message_create_t& event) {
 		event.reply(dpp::message(event.msg.channel_id, embed));
 		return;
 	}
+
+	user.lastPassive = currentTime;
 
 	size_t collected = user.passiveBalance;
 	user.cash += collected;
@@ -1703,7 +1733,7 @@ int main() {
 		}
 
 		if (message.starts_with("!view") || message.starts_with("!balance") || message.starts_with("!bal")) {
-			HandleViewCommand(user, event);
+			HandleViewCommand(users, user, event);
 			return;
 		}
 
